@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/AZapata27/reusable-workflows/compare/v1.0.0...v1.0.1) (2026-10-13)
+
+
+### CI / Dependencies
+
+* add OpenSSF Scorecard and weekly CodeQL schedule ([#4](https://github.com/AZapata27/reusable-workflows/issues/4)) ([ec5128f](https://github.com/AZapata27/reusable-workflows/commit/ec5128f381cf708353d272e1e078945da2562db5))
+
 ## 1.0.0 (2026-10-13)
 
 
