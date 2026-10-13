@@ -1,0 +1,5 @@
+# Normalise line endings: workflows, scripts and wrappers must keep LF on any OS.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.jar binary

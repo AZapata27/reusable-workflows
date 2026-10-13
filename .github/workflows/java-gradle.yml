@@ -1,0 +1,146 @@
+# Reusable workflow: build and test a Java project with the Gradle wrapper.
+#
+#   jobs:
+#     build:
+#       uses: AZapata27/reusable-workflows/.github/workflows/java-gradle.yml@<sha> # vX.Y.Z
+#       permissions:
+#         contents: read
+#
+# See docs/usage.md for matrix (multi-project) and other examples.
+name: Java (Gradle)
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: JDK version passed to actions/setup-java.
+        type: string
+        default: '21'
+      java-distribution:
+        description: JDK distribution (temurin, corretto, zulu, graalvm, ...).
+        type: string
+        default: temurin
+      working-directory:
+        description: Directory containing the Gradle wrapper (gradlew), relative to the repository root.
+        type: string
+        default: .
+      gradle-args:
+        description: Arguments passed to ./gradlew (split on whitespace; no shell expansion).
+        type: string
+        default: build
+      gradle-cache-provider:
+        description: "setup-gradle cache implementation: 'basic' (open source, default), 'enhanced' (commercial, accept its terms) or 'external'."
+        type: string
+        default: basic
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        default: 20
+      upload-test-reports:
+        description: Upload JUnit XML + HTML test reports as an artifact (the summary is always written).
+        type: boolean
+        default: true
+      report-name:
+        description: Test report artifact name. Defaults to 'test-reports-<working-directory>'; set it when the same directory is built more than once per run (e.g. a JDK matrix).
+        type: string
+        default: ''
+      runs-on:
+        description: Runner label. Defaults to ubuntu-latest (Docker available for Testcontainers).
+        type: string
+        default: ubuntu-latest
+      fetch-depth:
+        description: Git history depth for actions/checkout (0 = full history).
+        type: number
+        default: 1
+    outputs:
+      tests-failed:
+        description: Number of failed test cases reported by JUnit XML.
+        value: ${{ jobs.build.outputs.tests-failed }}
+
+permissions: {}
+
+jobs:
+  build:
+    name: Gradle ${{ inputs.gradle-args }} (${{ inputs.working-directory }}, JDK ${{ inputs.java-version }})
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    outputs:
+      tests-failed: ${{ steps.reports.outputs.failed }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Check out shared actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .reusable-workflows
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Hide shared actions from git
+        run: echo ".reusable-workflows/" >> .git/info/exclude
+
+      - name: Set up JDK and Gradle
+        uses: ./.reusable-workflows/actions/setup-jvm
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+          build-tool: gradle
+          working-directory: ${{ inputs.working-directory }}
+          gradle-cache-provider: ${{ inputs.gradle-cache-provider }}
+
+      - name: Gradle ${{ inputs.gradle-args }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GRADLE_ARGS: ${{ inputs.gradle-args }}
+        run: |
+          if [ ! -f ./gradlew ]; then
+            echo "::error title=java-gradle::No gradlew found in '${PWD}'. Commit the Gradle wrapper or set working-directory."
+            exit 1
+          fi
+          chmod +x ./gradlew
+          set -f   # word-split GRADLE_ARGS into arguments without glob expansion
+          # shellcheck disable=SC2086
+          ./gradlew ${GRADLE_ARGS}
+
+      - name: Resolve report name
+        id: report-name
+        if: ${{ !cancelled() }}
+        env:
+          REPORT_NAME: ${{ inputs.report-name }}
+          WORKDIR: ${{ inputs.working-directory }}
+        run: |
+          if [ -z "${REPORT_NAME}" ]; then
+            slug="$(printf '%s' "${WORKDIR}" | tr -c 'A-Za-z0-9._-' '-' | sed -e 's/^[-.]*//' -e 's/-*$//')"
+            REPORT_NAME="test-reports-${slug:-root}"
+          fi
+          echo "value=${REPORT_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Test reports
+        id: reports
+        if: ${{ !cancelled() }}
+        uses: ./.reusable-workflows/actions/test-reports
+        with:
+          name: ${{ steps.report-name.outputs.value }}
+          working-directory: ${{ inputs.working-directory }}
+          upload: ${{ inputs.upload-test-reports }}
+          title: Gradle tests (${{ inputs.working-directory }})
+          junit-files: '**/build/test-results/**/*.xml'
+          path: |
+            **/build/test-results/
+            **/build/reports/tests/

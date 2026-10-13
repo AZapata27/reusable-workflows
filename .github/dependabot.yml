@@ -1,0 +1,19 @@
+# Keeps every pinned action SHA (workflows and composite actions) up to date.
+# Dependabot rewrites both the SHA and the trailing "# vX.Y.Z" comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /actions/*
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7          # let new releases settle before adopting them
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+    labels: [dependencies, github-actions]

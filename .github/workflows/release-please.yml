@@ -1,0 +1,30 @@
+# Releases THIS repository: Conventional Commits on main -> release PR -> tag vX.Y.Z + GitHub Release + CHANGELOG.
+# Consumers pin to the tag's commit SHA (see docs/adr/0002-sha-pinning-and-versioning.md).
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    uses: ./.github/workflows/release.yml
+    # GitHub validates the permissions of every job in the called workflow against this
+    # ceiling at start-up, even jobs that end up skipped. The provenance job (id-token,
+    # attestations) is skipped here because no artifact-name is passed.
+    permissions:
+      contents: write        # release-please: tags, releases, release branch
+      issues: write          # release-please: autorelease labels
+      pull-requests: write   # release-please: release PR
+      id-token: write        # ceiling for the (skipped) provenance job
+      attestations: write    # ceiling for the (skipped) provenance job
+    with:
+      config-file: release-please-config.json
+      manifest-file: .release-please-manifest.json

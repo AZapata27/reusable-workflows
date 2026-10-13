@@ -1,0 +1,28 @@
+# Build output from the fixtures
+build/
+target/
+.gradle/
+node_modules/
+reports/
+*.class
+*.log
+
+# Maven wrapper downloads its jar on first run (not committed)
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle wrapper jar IS committed (validated in CI by gradle/actions/setup-gradle)
+!gradle/wrapper/gradle-wrapper.jar
+
+# Checkout of this repo's shared actions made by the reusable workflows at runtime
+.reusable-workflows/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local secrets (never commit)
+.env
+.env.*

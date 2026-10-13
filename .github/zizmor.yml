@@ -1,0 +1,16 @@
+# zizmor configuration for this repository. Every ignore is justified in
+# docs/adr/0003-least-privilege-and-hardening.md ("Accepted findings").
+rules:
+  self-repository:
+    # The `$/` self-repository syntax (GitHub changelog 2026-07-30) is not yet supported by
+    # actionlint v1.7.12, and its resolution inside a reusable workflow called from ANOTHER
+    # repository is not documented. Local `./` references are kept on purpose:
+    #   - ci.yml / release-please.yml call this repo's own reusable workflows at the same commit;
+    #   - the reusable workflows load shared actions from a checkout pinned to job.workflow_sha.
+    ignore:
+      - ci.yml
+      - release-please.yml
+      - java-gradle.yml
+      - java-maven.yml
+      - node.yml
+      - security.yml
