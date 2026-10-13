@@ -1,0 +1,143 @@
+# Reusable workflow: supply-chain and code scanning.
+#   - dependency-review: runs only for pull_request events; blocks PRs that add vulnerable
+#     (or license-denied) dependencies.
+#   - CodeQL: optional, enabled by passing codeql-languages.
+#
+#   jobs:
+#     security:
+#       uses: AZapata27/reusable-workflows/.github/workflows/security.yml@<sha> # vX.Y.Z
+#       permissions:
+#         contents: read
+#         security-events: write   # only needed when codeql-languages is set
+#       with:
+#         codeql-languages: '["java-kotlin"]'
+name: Security
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-severity:
+        description: "dependency-review: lowest vulnerability severity that fails the PR ('low', 'moderate', 'high', 'critical')."
+        type: string
+        default: moderate
+      allow-licenses:
+        description: dependency-review allow-list of SPDX licenses, comma-separated (empty = no license check beyond defaults).
+        type: string
+        default: ''
+      deny-licenses:
+        description: dependency-review deny-list of SPDX licenses, comma-separated. Mutually exclusive with allow-licenses.
+        type: string
+        default: ''
+      codeql-languages:
+        description: JSON array of CodeQL languages, e.g. '["java-kotlin","javascript-typescript","actions"]'. Empty = CodeQL disabled.
+        type: string
+        default: ''
+      codeql-build-mode:
+        description: "CodeQL build mode for compiled languages: 'none' (default, no build needed), 'autobuild' or 'manual'."
+        type: string
+        default: none
+      codeql-build-command:
+        description: Shell command used when codeql-build-mode is 'manual' (e.g. './gradlew compileJava -x test').
+        type: string
+        default: ''
+      codeql-queries:
+        description: CodeQL query suite ('security-extended', 'security-and-quality') or empty for the default suite.
+        type: string
+        default: security-extended
+      java-version:
+        description: JDK installed before CodeQL when build mode is 'autobuild' or 'manual' (empty = runner default).
+        type: string
+        default: ''
+      timeout-minutes:
+        description: Timeout for each job in minutes.
+        type: number
+        default: 30
+
+permissions: {}
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          allow-licenses: ${{ inputs.allow-licenses }}
+          deny-licenses: ${{ inputs.deny-licenses }}
+          # Writing a PR comment would need pull-requests: write; the job summary is enough.
+          comment-summary-in-pr: never
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    if: inputs.codeql-languages != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      actions: read            # read workflow run metadata (required for private repositories)
+      security-events: write   # upload SARIF results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.codeql-languages || '[]') }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out shared actions
+        if: inputs.java-version != '' && inputs.codeql-build-mode != 'none'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .reusable-workflows
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Set up JDK
+        if: inputs.java-version != '' && inputs.codeql-build-mode != 'none'
+        uses: ./.reusable-workflows/actions/setup-jvm
+        with:
+          java-version: ${{ inputs.java-version }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ (matrix.language == 'actions' || matrix.language == 'javascript-typescript' || matrix.language == 'python' || matrix.language == 'ruby') && 'none' || inputs.codeql-build-mode }}
+          queries: ${{ inputs.codeql-queries }}
+
+      - name: Build (manual build mode)
+        if: inputs.codeql-build-mode == 'manual' && matrix.language != 'actions' && matrix.language != 'javascript-typescript' && matrix.language != 'python' && matrix.language != 'ruby'
+        shell: bash
+        env:
+          BUILD_COMMAND: ${{ inputs.codeql-build-command }}
+        run: |
+          if [ -z "${BUILD_COMMAND}" ]; then
+            echo "::error title=security::codeql-build-mode is 'manual' but codeql-build-command is empty."
+            exit 1
+          fi
+          eval "${BUILD_COMMAND}"
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}

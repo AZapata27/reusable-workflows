@@ -1,0 +1,107 @@
+# Reusable workflow: lint the caller repository's GitHub Actions files.
+#   - actionlint: syntax, expressions, shellcheck on run: blocks, action inputs.
+#   - zizmor: security audit (template injection, excessive permissions, unpinned uses, credential persistence...).
+#
+#   jobs:
+#     workflow-lint:
+#       uses: AZapata27/reusable-workflows/.github/workflows/workflow-lint.yml@<sha> # vX.Y.Z
+#       permissions:
+#         contents: read
+name: Workflow lint
+
+on:
+  workflow_call:
+    inputs:
+      zizmor-min-severity:
+        description: "Minimum zizmor severity that is reported and fails the job: 'informational', 'low', 'medium' or 'high'."
+        type: string
+        default: low
+      zizmor-persona:
+        description: "zizmor persona: 'regular', 'pedantic' or 'auditor'."
+        type: string
+        default: regular
+      zizmor-config:
+        description: Optional path to a zizmor.yml in the caller repository (to ignore accepted findings).
+        type: string
+        default: ''
+      zizmor-version:
+        description: zizmor release to run (container image tag used by zizmor-action).
+        type: string
+        default: 1.30.1
+      timeout-minutes:
+        description: Timeout for each lint job in minutes.
+        type: number
+        default: 10
+
+permissions: {}
+
+env:
+  # actionlint is downloaded as a release binary and verified against a pinned SHA-256
+  # (bumped manually together with this version; see docs/adr/0002).
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint (checksum-verified)
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          dir="${RUNNER_TEMP}/actionlint"
+          mkdir -p "${dir}"
+          curl -fsSL --retry 3 -o "${dir}/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${dir}/${archive}" | sha256sum --check --strict -
+          tar -xzf "${dir}/${archive}" -C "${dir}" actionlint
+          echo "${dir}" >> "${GITHUB_PATH}"
+
+      - name: Run actionlint
+        shell: bash
+        run: |
+          actionlint -version
+          actionlint -color
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: ${{ inputs.zizmor-version }}
+          persona: ${{ inputs.zizmor-persona }}
+          min-severity: ${{ inputs.zizmor-min-severity }}
+          config: ${{ inputs.zizmor-config }}
+          # Annotations instead of SARIF upload: no security-events permission needed.
+          advanced-security: false
+          annotations: true
