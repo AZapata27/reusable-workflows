@@ -1,0 +1,78 @@
+# CI for this repository: lint every workflow/action and exercise the reusable
+# workflows end-to-end against the fixtures in tests/fixtures/ via local `uses:`.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  workflow-lint:
+    name: Workflow lint
+    uses: ./.github/workflows/workflow-lint.yml
+    permissions:
+      contents: read
+
+  gradle:
+    name: Fixture / Gradle
+    uses: ./.github/workflows/java-gradle.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/gradle-app
+      gradle-args: build --no-daemon
+      timeout-minutes: 15
+
+  maven:
+    name: Fixture / Maven
+    uses: ./.github/workflows/java-maven.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/maven-app
+      # Exercises pre-build-command (runs from the repository root before the main build).
+      pre-build-command: mvn -B -q -f tests/fixtures/maven-app/pom.xml validate
+      timeout-minutes: 15
+
+  node:
+    name: Fixture / Node
+    uses: ./.github/workflows/node.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/node-app
+      run-command: npm run test:ci
+      junit-files: reports/junit.xml
+      timeout-minutes: 10
+
+  security:
+    name: Security
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      actions: read            # CodeQL reads workflow run metadata
+      security-events: write   # CodeQL uploads SARIF to code scanning
+    with:
+      codeql-languages: '["actions"]'
+
+  verify-outputs:
+    name: Verify reusable workflow outputs
+    needs: [gradle, maven]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assert no failed tests were reported
+        env:
+          GRADLE_FAILED: ${{ needs.gradle.outputs.tests-failed }}
+          MAVEN_FAILED: ${{ needs.maven.outputs.tests-failed }}
+        run: |
+          echo "gradle tests-failed=${GRADLE_FAILED}, maven tests-failed=${MAVEN_FAILED}"
+          [ "${GRADLE_FAILED}" = "0" ] && [ "${MAVEN_FAILED}" = "0" ]
