@@ -1,0 +1,105 @@
+name: Test reports
+description: >-
+  Summarises JUnit XML results (passed / failed / skipped, plus the first failing tests)
+  in the job summary and uploads the report files as a workflow artifact.
+  Parsing uses the runner's python3 standard library only: no extra third-party action.
+author: AZapata27
+
+inputs:
+  name:
+    description: Artifact name. Must be unique within the workflow run (include the matrix value when called from a matrix).
+    required: true
+  working-directory:
+    description: Directory, relative to the workspace, that the globs below are resolved against.
+    required: false
+    default: .
+  junit-files:
+    description: Newline-separated glob(s) of JUnit XML files to summarise (relative to working-directory, '**' supported).
+    required: false
+    default: |
+      **/build/test-results/**/*.xml
+      **/target/surefire-reports/*.xml
+      **/target/failsafe-reports/*.xml
+  path:
+    description: Newline-separated path(s)/glob(s) to upload (relative to working-directory). Defaults to the JUnit files plus HTML reports.
+    required: false
+    default: |
+      **/build/test-results/
+      **/build/reports/tests/
+      **/target/surefire-reports/
+      **/target/failsafe-reports/
+  upload:
+    description: Upload the report files as an artifact ('true'/'false'). The summary is always written.
+    required: false
+    default: 'true'
+  retention-days:
+    description: Artifact retention in days.
+    required: false
+    default: '7'
+  title:
+    description: Heading used in the job summary.
+    required: false
+    default: Test results
+
+outputs:
+  total:
+    description: Number of test cases found.
+    value: ${{ steps.summary.outputs.total }}
+  passed:
+    description: Number of passed test cases.
+    value: ${{ steps.summary.outputs.passed }}
+  failed:
+    description: Number of failed or errored test cases.
+    value: ${{ steps.summary.outputs.failed }}
+  skipped:
+    description: Number of skipped test cases.
+    value: ${{ steps.summary.outputs.skipped }}
+  artifact-url:
+    description: URL of the uploaded artifact (empty when nothing was uploaded).
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Summarise JUnit results
+      id: summary
+      shell: bash
+      env:
+        REPORT_WORKDIR: ${{ inputs.working-directory }}
+        REPORT_GLOBS: ${{ inputs.junit-files }}
+        REPORT_TITLE: ${{ inputs.title }}
+      run: python3 "${GITHUB_ACTION_PATH}/summarize_junit.py"
+
+    - name: Resolve upload paths
+      id: paths
+      if: inputs.upload == 'true'
+      shell: bash
+      env:
+        REPORT_WORKDIR: ${{ inputs.working-directory }}
+        REPORT_PATHS: ${{ inputs.path }}
+      run: |
+        delimiter="EOF_$(openssl rand -hex 16)"
+        {
+          echo "list<<${delimiter}"
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "${line}" ] && continue
+            if [ "${REPORT_WORKDIR}" = "." ] || [ -z "${REPORT_WORKDIR}" ]; then
+              echo "${line}"
+            else
+              echo "${REPORT_WORKDIR%/}/${line}"
+            fi
+          done <<< "${REPORT_PATHS}"
+          echo "${delimiter}"
+        } >> "${GITHUB_OUTPUT}"
+
+    - name: Upload test reports
+      id: upload
+      if: inputs.upload == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ steps.paths.outputs.list }}
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.retention-days }}
