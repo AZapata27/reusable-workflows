@@ -183,7 +183,7 @@ on:
   push:
     branches: [master]
   schedule:
-    - cron: '23 4 * * 1'          # weekly CodeQL run
+    - cron: '23 6 * * 1'          # weekly CodeQL run (Monday 06:23 UTC); pick any minute
 
 jobs:
   security:
@@ -198,8 +198,16 @@ jobs:
       # fail-on-severity: moderate
 ```
 
-dependency-review only runs on `pull_request` events. Code scanning must be available for the
-repository (public repositories, or GitHub Code Security on private ones).
+Keep the weekly `schedule` trigger: CodeQL query packs are updated continuously, so a scheduled
+run finds new vulnerability classes in code that has not changed (GitHub's own CodeQL template
+does the same). dependency-review only runs on `pull_request` events; on `schedule` and `push`
+that job is **skipped** (it shows as skipped, not failed) and only CodeQL runs. Code scanning
+must be available for the repository (public repositories, or GitHub Code Security on private
+ones).
+
+If the security job lives in the same workflow as your build, the schedule also re-runs the
+build weekly (useful to detect drift); to scan only, put the `security` job in its own workflow
+file with the triggers above.
 
 ## Release (`release.yml`)
 
@@ -256,6 +264,85 @@ Outputs: `release_created`, `tag_name`, `version`. Verify an attached file with
 Keep `id-token` and `attestations` in the block even when you do not pass `artifact-name`:
 GitHub checks the permission ceiling of every job in the called workflow when the run starts,
 including the provenance job that will be skipped (ADR 0003).
+
+## OpenSSF Scorecard (per repository, not reusable)
+
+[OpenSSF Scorecard](https://scorecard.dev) scores a repository's supply-chain practices
+(pinned dependencies, token permissions, branch protection, SAST, ...). There is **no reusable
+workflow for it on purpose**: with `publish_results: true` (needed for the public badge and the
+Scorecard API) the scorecard-action verifies that the run comes from a workflow file in the
+scored repository that follows strict rules: no top-level `env`/`defaults`, no containers or
+services, no write permissions at the top level, and only `step-security/harden-runner`,
+`actions/checkout`, `ossf/scorecard-action`, `actions/upload-artifact` and
+`github/codeql-action/upload-sarif` in the job. A job that `uses:` a reusable workflow does not
+pass that check, so each repository keeps its own copy. Copy this file to
+`.github/workflows/scorecard.yml` (it is the same one this repository runs) and let Dependabot
+bump the SHAs:
+
+```yaml
+name: Scorecard
+
+on:
+  branch_protection_rule:       # re-score when protection changes
+  schedule:
+    - cron: '41 5 * * 1'        # weekly, Monday 05:41 UTC
+  push:
+    branches: [main]            # your default branch
+
+permissions: {}
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read             # read workflow runs
+      security-events: write    # upload SARIF to code scanning
+      id-token: write           # OIDC token to publish results to the Scorecard API
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: results.sarif
+```
+
+Then add the badge to the README (replace `<owner>/<repo>`):
+
+```markdown
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/<owner>/<repo>/badge)](https://scorecard.dev/viewer/?uri=github.com/<owner>/<repo>)
+```
+
+Notes: public repositories only for `publish_results: true` (on private ones set it to `false`
+and keep the SARIF upload, which needs GitHub Code Security). Some details of the Branch-Protection
+check are only visible with a token that has admin read access (`repo_token` input, see the
+scorecard-action README); with the default token that check may be partial, which is acceptable. The first badge appears after the first run on the
+default branch.
 
 ## Composite actions in your own jobs
 

@@ -1,11 +1,15 @@
 # CI for this repository: lint every workflow/action and exercise the reusable
 # workflows end-to-end against the fixtures in tests/fixtures/ via local `uses:`.
+# The weekly schedule re-runs CodeQL with the latest queries even when nothing changed
+# (dependency-review only runs on pull_request and is skipped there).
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '23 6 * * 1'          # weekly, Monday 06:23 UTC: CodeQL with fresh queries + fixture drift
 
 permissions: {}
 
