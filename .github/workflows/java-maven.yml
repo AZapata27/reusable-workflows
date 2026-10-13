@@ -1,0 +1,163 @@
+# Reusable workflow: build and test a Java project with Maven (./mvnw when present, otherwise mvn).
+#
+#   jobs:
+#     build:
+#       uses: AZapata27/reusable-workflows/.github/workflows/java-maven.yml@<sha> # vX.Y.Z
+#       permissions:
+#         contents: read
+#
+# See docs/usage.md for multi-module examples using pre-build-command.
+name: Java (Maven)
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: JDK version passed to actions/setup-java.
+        type: string
+        default: '21'
+      java-distribution:
+        description: JDK distribution (temurin, corretto, zulu, graalvm, ...).
+        type: string
+        default: temurin
+      working-directory:
+        description: Directory containing pom.xml (and optionally mvnw), relative to the repository root.
+        type: string
+        default: .
+      maven-args:
+        description: Arguments passed to Maven (split on whitespace; no shell expansion). --no-transfer-progress is added via MAVEN_ARGS.
+        type: string
+        default: -B verify
+      pre-build-command:
+        description: >-
+          Optional shell command run from the repository root before the main build, after the JDK is set up
+          (e.g. 'mvn -B -f shared-module/pom.xml install' to install a shared module first).
+        type: string
+        default: ''
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        default: 20
+      upload-test-reports:
+        description: Upload Surefire/Failsafe reports as an artifact (the summary is always written).
+        type: boolean
+        default: true
+      report-name:
+        description: Test report artifact name. Defaults to 'test-reports-<working-directory>'; set it when the same directory is built more than once per run.
+        type: string
+        default: ''
+      runs-on:
+        description: Runner label. Defaults to ubuntu-latest (Docker available for Testcontainers).
+        type: string
+        default: ubuntu-latest
+      fetch-depth:
+        description: Git history depth for actions/checkout (0 = full history).
+        type: number
+        default: 1
+    outputs:
+      tests-failed:
+        description: Number of failed test cases reported by JUnit XML.
+        value: ${{ jobs.build.outputs.tests-failed }}
+
+permissions: {}
+
+jobs:
+  build:
+    name: Maven ${{ inputs.maven-args }} (${{ inputs.working-directory }}, JDK ${{ inputs.java-version }})
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    outputs:
+      tests-failed: ${{ steps.reports.outputs.failed }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Maven >= 3.9 prepends MAVEN_ARGS to every invocation (mvn and mvnw alike).
+      MAVEN_ARGS: --no-transfer-progress
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Check out shared actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .reusable-workflows
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Hide shared actions from git
+        run: echo ".reusable-workflows/" >> .git/info/exclude
+
+      - name: Set up JDK (Maven cache)
+        uses: ./.reusable-workflows/actions/setup-jvm
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: ${{ inputs.java-distribution }}
+          build-tool: maven
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Pre-build command
+        if: inputs.pre-build-command != ''
+        env:
+          PRE_BUILD_COMMAND: ${{ inputs.pre-build-command }}
+        run: |
+          echo "::group::${PRE_BUILD_COMMAND}"
+          eval "${PRE_BUILD_COMMAND}"
+          echo "::endgroup::"
+
+      - name: Maven ${{ inputs.maven-args }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          MAVEN_CLI_ARGS: ${{ inputs.maven-args }}
+        run: |
+          if [ -f ./mvnw ]; then
+            chmod +x ./mvnw
+            mvn_cmd=./mvnw
+          else
+            mvn_cmd=mvn
+          fi
+          echo "Using ${mvn_cmd}"
+          set -f   # word-split MAVEN_CLI_ARGS into arguments without glob expansion
+          # shellcheck disable=SC2086
+          "${mvn_cmd}" ${MAVEN_CLI_ARGS}
+
+      - name: Resolve report name
+        id: report-name
+        if: ${{ !cancelled() }}
+        env:
+          REPORT_NAME: ${{ inputs.report-name }}
+          WORKDIR: ${{ inputs.working-directory }}
+        run: |
+          if [ -z "${REPORT_NAME}" ]; then
+            slug="$(printf '%s' "${WORKDIR}" | tr -c 'A-Za-z0-9._-' '-' | sed -e 's/^[-.]*//' -e 's/-*$//')"
+            REPORT_NAME="test-reports-${slug:-root}"
+          fi
+          echo "value=${REPORT_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Test reports
+        id: reports
+        if: ${{ !cancelled() }}
+        uses: ./.reusable-workflows/actions/test-reports
+        with:
+          name: ${{ steps.report-name.outputs.value }}
+          working-directory: ${{ inputs.working-directory }}
+          upload: ${{ inputs.upload-test-reports }}
+          title: Maven tests (${{ inputs.working-directory }})
+          junit-files: |
+            **/target/surefire-reports/*.xml
+            **/target/failsafe-reports/*.xml
+          path: |
+            **/target/surefire-reports/
+            **/target/failsafe-reports/

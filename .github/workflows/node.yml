@@ -1,0 +1,207 @@
+# Reusable workflow: install dependencies and run a command in a Node.js project (plain or Nx monorepo).
+#
+#   jobs:
+#     ci:
+#       uses: AZapata27/reusable-workflows/.github/workflows/node.yml@<sha> # vX.Y.Z
+#       permissions:
+#         contents: read
+#       with:
+#         run-command: npx nx run-many -t lint test build
+#
+# The package manager is detected from the lockfile in working-directory:
+#   pnpm-lock.yaml -> pnpm (via corepack), yarn.lock -> yarn (via corepack),
+#   package-lock.json / npm-shrinkwrap.json -> npm.
+name: Node
+
+on:
+  workflow_call:
+    inputs:
+      node-version-file:
+        description: Node version file, relative to working-directory (.nvmrc, .node-version, .tool-versions or package.json).
+        type: string
+        default: .nvmrc
+      node-version:
+        description: Explicit Node version (e.g. '22'); overrides node-version-file when set.
+        type: string
+        default: ''
+      working-directory:
+        description: Directory containing package.json, relative to the repository root.
+        type: string
+        default: .
+      install-command:
+        description: Dependency install command. Empty = auto-detect from the lockfile (npm ci / pnpm install --frozen-lockfile / yarn install --immutable|--frozen-lockfile).
+        type: string
+        default: ''
+      run-command:
+        description: Command to run after install (e.g. 'npm test', 'npm run build', 'npx nx run-many -t lint test build'). Empty = '<package-manager> test'.
+        type: string
+        default: ''
+      nx-no-cloud:
+        description: Export NX_NO_CLOUD=true so runs never contact Nx Cloud (self-contained, no secrets needed).
+        type: boolean
+        default: true
+      fetch-depth:
+        description: Git history depth for actions/checkout. Use 0 for 'nx affected' or anything that needs full history.
+        type: number
+        default: 1
+      timeout-minutes:
+        description: Job timeout in minutes.
+        type: number
+        default: 20
+      upload-test-reports:
+        description: Upload test reports as an artifact when junit-files match anything (the summary is written whenever junit-files is set).
+        type: boolean
+        default: true
+      junit-files:
+        description: Optional newline-separated glob(s), relative to working-directory, of JUnit XML produced by run-command (e.g. 'reports/junit.xml'). Empty = no test summary.
+        type: string
+        default: ''
+      report-name:
+        description: Test report artifact name. Defaults to 'test-reports-<working-directory>'.
+        type: string
+        default: ''
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+
+permissions: {}
+
+jobs:
+  node:
+    name: Node (${{ inputs.working-directory }})
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    env:
+      NX_NO_CLOUD: ${{ inputs.nx-no-cloud && 'true' || 'false' }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Detect package manager and Node version source
+        id: detect
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          NODE_VERSION: ${{ inputs.node-version }}
+          NODE_VERSION_FILE: ${{ inputs.node-version-file }}
+          WORKDIR: ${{ inputs.working-directory }}
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            pm=pnpm; lockfile=pnpm-lock.yaml
+          elif [ -f yarn.lock ]; then
+            pm=yarn; lockfile=yarn.lock
+          elif [ -f package-lock.json ]; then
+            pm=npm; lockfile=package-lock.json
+          elif [ -f npm-shrinkwrap.json ]; then
+            pm=npm; lockfile=npm-shrinkwrap.json
+          else
+            echo "::error title=node::No lockfile (package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml or yarn.lock) in '${WORKDIR}'. Commit one for reproducible installs."
+            exit 1
+          fi
+          prefix=""
+          if [ "${WORKDIR}" != "." ] && [ -n "${WORKDIR}" ]; then prefix="${WORKDIR%/}/"; fi
+          version_file=""
+          if [ -z "${NODE_VERSION}" ]; then
+            if [ ! -f "${NODE_VERSION_FILE}" ]; then
+              echo "::error title=node::'${prefix}${NODE_VERSION_FILE}' not found. Add it or pass the node-version input."
+              exit 1
+            fi
+            version_file="${prefix}${NODE_VERSION_FILE}"
+          fi
+          {
+            echo "pm=${pm}"
+            echo "lockfile=${prefix}${lockfile}"
+            echo "version-file=${version_file}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Package manager: ${pm} (${prefix}${lockfile})"
+
+      - name: Enable corepack (pnpm / yarn)
+        if: steps.detect.outputs.pm != 'npm'
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ steps.detect.outputs.version-file }}
+          cache: ${{ steps.detect.outputs.pm }}
+          cache-dependency-path: ${{ steps.detect.outputs.lockfile }}
+
+      - name: Re-enable corepack for the selected Node.js
+        if: steps.detect.outputs.pm != 'npm'
+        run: corepack enable
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+          PM: ${{ steps.detect.outputs.pm }}
+        run: |
+          if [ -z "${INSTALL_COMMAND}" ]; then
+            case "${PM}" in
+              npm)  INSTALL_COMMAND="npm ci" ;;
+              pnpm) INSTALL_COMMAND="pnpm install --frozen-lockfile" ;;
+              yarn) if [ -f .yarnrc.yml ]; then INSTALL_COMMAND="yarn install --immutable"; else INSTALL_COMMAND="yarn install --frozen-lockfile"; fi ;;
+            esac
+          fi
+          echo "::group::${INSTALL_COMMAND}"
+          eval "${INSTALL_COMMAND}"
+          echo "::endgroup::"
+
+      - name: Run command
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          RUN_COMMAND: ${{ inputs.run-command }}
+          PM: ${{ steps.detect.outputs.pm }}
+        run: |
+          if [ -z "${RUN_COMMAND}" ]; then RUN_COMMAND="${PM} test"; fi
+          echo "Running: ${RUN_COMMAND}"
+          eval "${RUN_COMMAND}"
+
+      - name: Check out shared actions
+        if: ${{ !cancelled() && inputs.junit-files != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .reusable-workflows
+          sparse-checkout: actions
+          persist-credentials: false
+
+      - name: Resolve report name
+        id: report-name
+        if: ${{ !cancelled() && inputs.junit-files != '' }}
+        env:
+          REPORT_NAME: ${{ inputs.report-name }}
+          WORKDIR: ${{ inputs.working-directory }}
+        run: |
+          echo ".reusable-workflows/" >> .git/info/exclude
+          if [ -z "${REPORT_NAME}" ]; then
+            slug="$(printf '%s' "${WORKDIR}" | tr -c 'A-Za-z0-9._-' '-' | sed -e 's/^[-.]*//' -e 's/-*$//')"
+            REPORT_NAME="test-reports-${slug:-root}"
+          fi
+          echo "value=${REPORT_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Test reports
+        if: ${{ !cancelled() && inputs.junit-files != '' }}
+        uses: ./.reusable-workflows/actions/test-reports
+        with:
+          name: ${{ steps.report-name.outputs.value }}
+          working-directory: ${{ inputs.working-directory }}
+          upload: ${{ inputs.upload-test-reports }}
+          title: Node tests (${{ inputs.working-directory }})
+          junit-files: ${{ inputs.junit-files }}
+          path: ${{ inputs.junit-files }}
