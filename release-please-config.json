@@ -18,8 +18,7 @@
   ],
   "packages": {
     ".": {
-      "package-name": "reusable-workflows",
-      "release-as": "1.0.0"
+      "package-name": "reusable-workflows"
     }
   }
 }
