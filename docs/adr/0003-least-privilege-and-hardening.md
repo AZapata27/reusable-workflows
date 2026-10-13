@@ -68,6 +68,23 @@ credential or injection point is multiplied by the number of consumers.
 (regular persona, `min-severity: low`, online audits) on the caller's `.github/`. This repository
 runs it on itself in `ci.yml`.
 
+### Continuous scanning (CodeQL schedule, OpenSSF Scorecard)
+
+- `ci.yml` also runs on a weekly `schedule` so CodeQL re-scans unchanged code with updated
+  queries; consumers are told to do the same (`docs/usage.md`). dependency-review is
+  `pull_request`-only and is skipped on `schedule`/`push`.
+- This repository runs OpenSSF Scorecard (`.github/workflows/scorecard.yml`) weekly, on pushes
+  to `main` and on `branch_protection_rule`, publishing to the Scorecard API (README badge) and
+  to code scanning. Job permissions: `contents: read`, `actions: read`, `security-events: write`,
+  `id-token: write` (OIDC for publishing); top level `{}`.
+- **Scorecard is deliberately not offered as a reusable workflow.** With `publish_results: true`
+  the Scorecard API validates the run's OIDC token against the workflow file in the scored
+  repository and rejects workflows that do not follow its constraints (no top-level
+  `env`/`defaults`, no containers/services, no top-level write permissions, and only
+  harden-runner, checkout, scorecard-action, upload-artifact and codeql-action/upload-sarif
+  steps). A caller job that `uses:` a reusable workflow cannot meet them, so `docs/usage.md`
+  provides a copy-paste template instead; Dependabot keeps each copy's SHAs current.
+
 ## Accepted findings
 
 | Tool | Finding | Where | Why accepted |

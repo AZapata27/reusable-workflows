@@ -1,6 +1,7 @@
 # reusable-workflows
 
 [![CI](https://github.com/AZapata27/reusable-workflows/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AZapata27/reusable-workflows/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AZapata27/reusable-workflows/badge)](https://scorecard.dev/viewer/?uri=github.com/AZapata27/reusable-workflows)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Centralised CI/CD for my personal repositories: **reusable workflows** and **composite actions**
@@ -57,7 +58,7 @@ jobs:
 ```
 
 More examples — matrix over subprojects, Maven multi-module with `pre-build-command`, Nx
-monorepo, security, releases with provenance, Dependabot for consumers — in
+monorepo, security (weekly CodeQL), OpenSSF Scorecard, releases with provenance, Dependabot for consumers — in
 **[docs/usage.md](docs/usage.md)**.
 
 ## Security model
@@ -85,7 +86,7 @@ and let Dependabot bump it. See [ADR 0002](docs/adr/0002-sha-pinning-and-version
 ## Repository layout
 
 ```
-.github/workflows/   reusable workflows + this repo's ci.yml and release-please.yml
+.github/workflows/   reusable workflows + this repo's ci.yml, release-please.yml and scorecard.yml
 actions/             composite actions
 tests/fixtures/      minimal Gradle, Maven and Node projects exercised by ci.yml
 docs/                usage guide and ADRs
